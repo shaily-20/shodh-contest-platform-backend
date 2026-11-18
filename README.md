@@ -1,39 +1,54 @@
 # Shodh Contest Platform Backend
 
-FastAPI contest backend with JWT authentication and local Docker-based Python judging.
+FastAPI contest backend with PostgreSQL and Docker-isolated Python judging.
 
-## Run locally
+## Start from scratch
 
-Requires Docker Engine/Desktop with Compose and a working local Docker daemon. Copy `.env.example` to `.env`, change both secrets, then run:
+Requires Docker Engine/Desktop and Compose. From the repository root:
 
 ```bash
+cp .env.example .env
+# Replace JWT_SECRET and ORGANIZER_REGISTRATION_KEY with separate random values.
 docker compose up --build
 ```
 
-Open <http://localhost:8000/docs> for the interactive API, <http://localhost:8000/health> for API/database health, and <http://localhost:8000/redoc> for the reference docs. The first submission downloads the `python:3.12-alpine` judge image if it is not already present.
+Compose starts PostgreSQL, runs the idempotent demo seed, then starts the API and worker. Open <http://localhost:8000/docs> and check <http://localhost:8000/health>. `docker compose down` stops services; `docker compose down -v` also deletes database data.
 
-The local worker mounts `/var/run/docker.sock` to launch judge containers. **Access to this socket is effectively host-root access.** Keep this configuration on a trusted local machine; do not expose the worker or Docker socket to untrusted users/hosts. For a public service, use a dedicated isolated runner host or a hardened remote execution service.
+### Seed accounts
 
-## Authentication / bootstrap
+The local seed creates two organizations, two organizer identities, two participants, two contests, and three small problems. All four accounts use the temporary password `sample-password-change-me`. Log in with `POST /auth/token`, using one of these `external_id` values:
 
-Registration at `POST /auth/register` takes `external_id`, `display_name`, and a password of at least 12 characters. It returns a 12-hour bearer token. Use the `Authorize` button in `/docs` or send `Authorization: Bearer <access_token>`.
+- `seed-organizer-a`
+- `seed-organizer-b`
+- `seed-participant-a`
+- `seed-participant-b`
 
-Participant registration does not need a key. To bootstrap an organizer, include `organizer_key` matching `ORGANIZER_REGISTRATION_KEY` from `.env`. Organizer accounts can create organizations, contests, and problem statements. Keep that key private. `POST /auth/token` accepts JSON credentials; `POST /auth/token/form` is the OAuth2 form endpoint.
+Change or remove these sample accounts before any non-local deployment. Seed data is intended only for evaluation. Re-run seeding with `docker compose run --rm seed`; it will leave existing seed data untouched.
 
-## Basic workflow
+## Authentication and API workflow
 
-1. Register an organizer using the bootstrap key.
-2. Create an organization, then create a contest (`starts_at` and `ends_at` must be ISO 8601 timestamps with timezone).
-3. Create a problem with test cases. Test input and expected output are private and are never returned by problem read endpoints.
-4. Register a participant and call `POST /contests/{contest_id}/join` using its bearer token.
-5. Submit Python (`language: "python"`) code to `POST /contests/{contest_id}/submissions`; poll `GET /submissions/{submission_id}`. Identity is taken from the token, not request data.
+Registration at `POST /auth/register` accepts `external_id`, `display_name`, and a password of at least 12 characters. Provide the configured `ORGANIZER_REGISTRATION_KEY` to create an organizer. `POST /auth/token` accepts JSON credentials and returns a bearer token. Use **Authorize** in `/docs`.
 
-The judging worker claims queued attempts from PostgreSQL, runs each case in a fresh container, and records the verdict. It supports Python 3 only. Containers have networking disabled, a read-only root filesystem, a non-root user, dropped Linux capabilities, no-new-privileges, and CPU, memory, process, timeout, and output limits. These controls are defense in depth, not a guarantee of safe execution on a shared/public host.
+The supported workflow is to create an organization and contest as an organizer, create a problem with test cases, join a contest as a participant, submit Python code to `POST /contests/{contest_id}/submissions`, and poll `GET /submissions/{submission_id}`. Contest timestamps must include a timezone. Submission requires an active contest and prior participation. Submission keys are unique per participant and contest; reusing the key with a different code or problem returns a conflict.
 
-## Existing local database
+## Judging and security limits
 
-The account table is additive and is created when the API starts. Existing identities do not have login credentials; create a new account with a new `external_id`. Back up data before resetting anything. `docker compose down -v` deletes the local database and is not required for upgrades.
+The PostgreSQL record is the queue: the API stores the submission and a queued attempt in one database transaction, and workers claim queued or expired leased work. The worker runs Python 3 only. Each test case runs in a fresh Docker container with network disabled, a read-only root filesystem, a non-root user, dropped capabilities, no-new-privileges, and configured CPU, memory, process and time limits. Container cleanup is attempted after execution.
 
-## Limitations
+**Important:** the trusted worker mounts `/var/run/docker.sock`; access to this socket is effectively host-root access. Submitted code does not receive that mount, but this design is suitable only for trusted local development/evaluation—not a public multi-tenant production service. Use a separately isolated runner host/service before public deployment. Vercel functions do not provide the Docker daemon required by this worker.
 
-This is a local-development baseline, not a production-ready auth or judge service: no email verification/password reset/rate limiting, and execution isolation depends on your host's Docker/kernel configuration. Configure real secrets, TLS, backups, migrations, monitoring, and an isolated runner before deployment.
+## Assignment status and known limitations
+
+This repository is an evaluation prototype, not a claim of full take-home compliance. In particular, do not report the following as complete unless separately implemented and verified: leaderboard scoring/penalties and deterministic tie-breaks; organizer rejudge API; bounded retry/dead-letter behavior and stale-worker fencing; migrations; complete organization-scoped authorization; hidden-test confidentiality audit; real-runner and barrier-coordinated multi-process race tests; repeatable load results and query-plan comparison; structured cross-service tracing. Run and document these checks before claiming the corresponding requirement is satisfied.
+
+The included seed is deterministic in names and content but uses generated database IDs and a time-relative contest window. `Base.metadata.create_all` is still used at API startup; Alembic migrations should replace it for a durable production schema. Do not publish real credentials, hidden tests, or candidate code in logs.
+
+## Verification
+
+```bash
+docker compose ps
+curl http://localhost:8000/health
+docker compose logs --tail=100 api worker seed
+```
+
+OpenAPI documentation is available at `/docs`; the OpenAPI JSON is `/openapi.json`. The Docker runner should be exercised locally with accepted, wrong-answer, runtime-error, timeout and excessive-output submissions before submitting the take-home. Record the commit, machine resources, dataset, concurrency, execution mode, latency percentiles, errors, and queue delay for any workload report—do not invent performance results.
