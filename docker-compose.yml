@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: shodh
+      POSTGRES_USER: shodh
+      POSTGRES_PASSWORD: shodh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shodh -d shodh"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://shodh:shodh@postgres:5432/shodh
+      RUNNER_MODE: double
+      WORKER_ID: api-process
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  api2:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://shodh:shodh@postgres:5432/shodh
+      RUNNER_MODE: double
+      WORKER_ID: api-process-2
+    ports:
+      - "8001:8000"
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://shodh:shodh@postgres:5432/shodh
+      RUNNER_MODE: double
+      WORKER_ID: worker-a
+    restart: unless-stopped
+
+  worker2:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://shodh:shodh@postgres:5432/shodh
+      RUNNER_MODE: double
+      WORKER_ID: worker-b
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
