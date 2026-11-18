@@ -1,1 +1,1 @@
-FastAPI contest-platform backend.
+
