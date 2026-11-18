@@ -1,49 +1,39 @@
 # Shodh Contest Platform Backend
 
-FastAPI backend for managing organizations, participants, contests, problems, and code submissions. The interactive REST interface is generated from the API schemas.
+FastAPI contest backend with JWT authentication and local Docker-based Python judging.
 
-## Run the complete local stack
+## Run locally
 
-Requires Docker Desktop / Docker Engine with the Compose plugin:
+Requires Docker Engine/Desktop with Compose and a working local Docker daemon. Copy `.env.example` to `.env`, change both secrets, then run:
 
 ```bash
 docker compose up --build
 ```
 
-Once the containers are healthy:
+Open <http://localhost:8000/docs> for the interactive API, <http://localhost:8000/health> for API/database health, and <http://localhost:8000/redoc> for the reference docs. The first submission downloads the `python:3.12-alpine` judge image if it is not already present.
 
-- API landing response: <http://localhost:8000/>
-- Interactive Swagger UI: <http://localhost:8000/docs>
-- ReDoc: <http://localhost:8000/redoc>
-- Database health check: <http://localhost:8000/health>
+The local worker mounts `/var/run/docker.sock` to launch judge containers. **Access to this socket is effectively host-root access.** Keep this configuration on a trusted local machine; do not expose the worker or Docker socket to untrusted users/hosts. For a public service, use a dedicated isolated runner host or a hardened remote execution service.
 
-Stop with `docker compose down`; add `-v` only if you also want to delete the local database volume.
+## Authentication / bootstrap
 
-## Run the API without Docker
+Registration at `POST /auth/register` takes `external_id`, `display_name`, and a password of at least 12 characters. It returns a 12-hour bearer token. Use the `Authorize` button in `/docs` or send `Authorization: Bearer <access_token>`.
 
-Requires Python 3.12+ and a running PostgreSQL database. Set `DATABASE_URL` to an async PostgreSQL URL, then run:
+Participant registration does not need a key. To bootstrap an organizer, include `organizer_key` matching `ORGANIZER_REGISTRATION_KEY` from `.env`. Organizer accounts can create organizations, contests, and problem statements. Keep that key private. `POST /auth/token` accepts JSON credentials; `POST /auth/token/form` is the OAuth2 form endpoint.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
-```
+## Basic workflow
 
-## API quick start
+1. Register an organizer using the bootstrap key.
+2. Create an organization, then create a contest (`starts_at` and `ends_at` must be ISO 8601 timestamps with timezone).
+3. Create a problem with test cases. Test input and expected output are private and are never returned by problem read endpoints.
+4. Register a participant and call `POST /contests/{contest_id}/join` using its bearer token.
+5. Submit Python (`language: "python"`) code to `POST /contests/{contest_id}/submissions`; poll `GET /submissions/{submission_id}`. Identity is taken from the token, not request data.
 
-Use `/docs` to explore and invoke every endpoint. Typical setup sequence:
+The judging worker claims queued attempts from PostgreSQL, runs each case in a fresh container, and records the verdict. It supports Python 3 only. Containers have networking disabled, a read-only root filesystem, a non-root user, dropped Linux capabilities, no-new-privileges, and CPU, memory, process, timeout, and output limits. These controls are defense in depth, not a guarantee of safe execution on a shared/public host.
 
-1. `POST /organizations` — create an organization.
-2. `POST /identities` — create a participant identity.
-3. `POST /contests` — create a contest for the organization.
-4. `POST /organizations/{organization_id}/problems` — add a problem statement and private test cases.
-5. `POST /contests/{contest_id}/join` — register the participant.
-6. `POST /contests/{contest_id}/submissions` — create a submission; include a unique `idempotency_key`.
-7. `GET /submissions/{submission_id}?identity_id=...` — check submission status.
+## Existing local database
 
-Submission records and judging attempts are persisted in PostgreSQL. **This repository does not yet include a code-execution/judging worker**, so submissions remain `queued`; do not treat them as evaluated. User identity is currently supplied as an ID in requests rather than verified authentication, so this is a development starter, not a production-ready public service.
+The account table is additive and is created when the API starts. Existing identities do not have login credentials; create a new account with a new `external_id`. Back up data before resetting anything. `docker compose down -v` deletes the local database and is not required for upgrades.
 
-## Configuration
+## Limitations
 
-`DATABASE_URL` is configurable through the environment (default is the Compose PostgreSQL service). Schema creation at API startup is intended for local development; production deployments should use versioned Alembic migrations. The API does not expose private test inputs/expected outputs through its problem read endpoints.
+This is a local-development baseline, not a production-ready auth or judge service: no email verification/password reset/rate limiting, and execution isolation depends on your host's Docker/kernel configuration. Configure real secrets, TLS, backups, migrations, monitoring, and an isolated runner before deployment.

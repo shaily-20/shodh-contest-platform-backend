@@ -18,10 +18,29 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    environment:
+    environment: &app_environment
       DATABASE_URL: postgresql+asyncpg://shodh:shodh@postgres:5432/shodh
+      JWT_SECRET: ${JWT_SECRET:-local-development-secret-change-me}
+      ORGANIZER_REGISTRATION_KEY: ${ORGANIZER_REGISTRATION_KEY:-local-organizer-key-change-me}
     ports:
       - "8000:8000"
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *app_environment
+      WORKER_ID: judging-worker
+      RUNNER_TIMEOUT_SECONDS: ${RUNNER_TIMEOUT_SECONDS:-2}
+      RUNNER_MEMORY_BYTES: ${RUNNER_MEMORY_BYTES:-67108864}
+      RUNNER_IMAGE: ${RUNNER_IMAGE:-python:3.12-alpine}
+    volumes:
+      # Grants the worker access to your local Docker daemon so it can start isolated judge containers.
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
 volumes:
