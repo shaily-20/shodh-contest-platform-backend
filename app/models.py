@@ -1,18 +1,13 @@
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import Boolean, DateTime, Enum as SAEnum, ForeignKey, Integer, String, Text, UniqueConstraint, Index, func
+from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, Integer, String, Text, UniqueConstraint, Index, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
     pass
-
-
-class Role(str, Enum):
-    PARTICIPANT = "participant"
-    ORGANIZER = "organizer"
 
 
 class OrgRole(str, Enum):
@@ -50,6 +45,15 @@ class Identity(Base):
     external_id: Mapped[str] = mapped_column(String(100), unique=True)
     display_name: Mapped[str] = mapped_column(String(200))
     memberships: Mapped[list["Membership"]] = relationship(back_populates="identity")
+    account: Mapped["Account | None"] = relationship(back_populates="identity", uselist=False)
+
+
+class Account(Base):
+    __tablename__ = "accounts"
+    identity_id: Mapped[int] = mapped_column(ForeignKey("identities.id", ondelete="CASCADE"), primary_key=True)
+    password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="participant", server_default="participant")
+    identity: Mapped[Identity] = relationship(back_populates="account")
 
 
 class Membership(Base):
@@ -155,19 +159,3 @@ class JudgingAttempt(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     judge_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     __table_args__ = (UniqueConstraint("submission_id", "attempt_number", name="uq_attempt_number"),)
-
-
-class DomainError(Exception):
-    pass
-
-
-class ConflictError(DomainError):
-    pass
-
-
-class ForbiddenError(DomainError):
-    pass
-
-
-class NotFoundError(DomainError):
-    pass
